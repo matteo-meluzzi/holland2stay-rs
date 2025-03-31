@@ -47,7 +47,7 @@ pub struct House {
     pub city: City,
 }
 
-pub async fn query_rooms(city: City) -> Result<Vec<House>, Holland2StayError> {
+pub async fn query_houses_in_city(city: City) -> Result<Vec<House>, Holland2StayError> {
     let url = reqwest::Url::parse("https://api.holland2stay.com/graphql/")
         .expect("could not parse holland2stay api url");
     let client = reqwest::Client::new();
@@ -85,10 +85,10 @@ pub async fn query_rooms(city: City) -> Result<Vec<House>, Holland2StayError> {
     })
 }
 
-pub async fn query_rooms_cities(cities: &[City]) -> Result<Vec<House>, Holland2StayError> {
+pub async fn query_houses_in_cities(cities: &[City]) -> Result<Vec<House>, Holland2StayError> {
     let future_houses = cities
         .into_iter()
-        .map(async |&city| query_rooms(city).await);
+        .map(async |&city| query_houses_in_city(city).await);
 
     futures::future::join_all(future_houses)
         .await
@@ -113,16 +113,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_query_rooms() {
-        let cities = query_rooms(City::Rotterdam).await.unwrap();
+    async fn test_query_houses_in_city() {
+        let cities = query_houses_in_city(City::Rotterdam).await.unwrap();
         for city in cities {
             println!("{}", city.name);
         }
     }
 
     #[tokio::test]
-    async fn test_query_rooms_cities() {
-        let cities = query_rooms_cities(&[City::Rotterdam, City::Eindhoven])
+    async fn test_query_houses_cities() {
+        let cities = query_houses_in_cities(&[City::Rotterdam, City::Eindhoven])
             .await
             .unwrap();
         for city in cities {
