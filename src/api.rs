@@ -5,10 +5,10 @@ fn get_graphql_query(city_id: CityId) -> String {
     )
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CityId(u64);
 
-#[derive(Clone, Copy, PartialEq, Eq, derive_more::Display)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, derive_more::Display, derive_more::FromStr)]
 pub enum City {
     Delft,
     Eindhoven,
@@ -40,7 +40,7 @@ pub enum Holland2StayError {
     ConversionError(String),
 }
 
-#[derive(derive_new::new, derive_more::Display)]
+#[derive(derive_new::new, derive_more::Display, Hash, PartialEq, Eq)]
 #[display("{}: {}", city, name)]
 pub struct House {
     pub name: String,
@@ -85,10 +85,10 @@ pub async fn query_houses_in_city(city: City) -> Result<Vec<House>, Holland2Stay
     })
 }
 
-pub async fn query_houses_in_cities(cities: &[City]) -> Result<Vec<House>, Holland2StayError> {
-    let future_houses = cities
-        .into_iter()
-        .map(async |&city| query_houses_in_city(city).await);
+pub async fn query_houses_in_cities(
+    cities: impl Iterator<Item = &City>,
+) -> Result<Vec<House>, Holland2StayError> {
+    let future_houses = cities.map(async |&city| query_houses_in_city(city).await);
 
     futures::future::join_all(future_houses)
         .await

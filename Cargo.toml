@@ -18,3 +18,4 @@ dotenv = "0.15.0"
 derive-new = "0.7.0"
 derive_more = { version = "2", features = ["full"] }
 futures = "0.3.31"
+itertools = "0.14.0"
