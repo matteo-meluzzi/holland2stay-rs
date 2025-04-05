@@ -21,19 +21,29 @@ impl<T, E: std::fmt::Display> LogErr for Result<T, E> {
     }
 }
 
+fn holland2stay_url() -> &'static str {
+    "https://holland2stay.com/residences?available_to_book%5Bfilter%5D=Available+to+book%2C179&page=1"
+}
+
 #[derive(BotCommands, Clone)]
-#[command(rename_rule = "lowercase")]
+#[command(
+    rename_rule = "lowercase",
+    description = "These commands are supported:"
+)]
 enum Command {
-    #[command()]
+    #[command(description = "Display this text.")]
+    Help,
+
+    #[command(description = "Subscribe to a city")]
     Watch(City),
 
-    #[command()]
+    #[command(description = "Unscubscribe from a city")]
     Unwatch(City),
 
-    #[command()]
+    #[command(description = "Unscubscribe from all cities")]
     Unsubscribe,
 
-    #[command()]
+    #[command(description = "List subscriptions")]
     Subscriptions,
 }
 
@@ -50,6 +60,10 @@ async fn answer<B: Requester>(
     let chat_id = msg.chat.id;
 
     match cmd {
+        Command::Help => {
+            bot.send_message(chat_id, Command::descriptions().to_string())
+                .await?;
+        }
         Command::Watch(city) => {
             observers_mutex
                 .lock()
@@ -64,9 +78,14 @@ async fn answer<B: Requester>(
             .await?;
 
             let houses = houses.lock().await;
+            let mut send_url = false;
             for house in houses.iter().filter(|house| house.city == city) {
                 bot.send_message(chat_id, format!("There is this house: {}", house))
                     .await?;
+                send_url = true;
+            }
+            if send_url {
+                bot.send_message(chat_id, holland2stay_url()).await?;
             }
         }
         Command::Unwatch(city) => {
@@ -92,7 +111,7 @@ async fn answer<B: Requester>(
         }
         Command::Unsubscribe => {
             if let Some(cities) = observers_mutex.lock().await.remove(&chat_id) {
-                let cities_list = itertools::join(cities, ",");
+                let cities_list = itertools::join(cities, ", ");
                 bot.send_message(
                     chat_id,
                     format!("You are now unsubscribed from {}.", cities_list),
@@ -105,7 +124,7 @@ async fn answer<B: Requester>(
         }
         Command::Subscriptions => {
             if let Some(cities) = observers_mutex.lock().await.get(&chat_id) {
-                let cities_list = itertools::join(cities, ",");
+                let cities_list = itertools::join(cities, ", ");
                 bot.send_message(chat_id, format!("You are subscribed to {}.", cities_list))
                     .await?;
             } else {
@@ -140,6 +159,7 @@ async fn get_houses_and_notify<Bot: Requester>(
     match api::query_houses_in_cities(all_cities.iter()).await {
         Ok(new_houses) => {
             let new_houses: HashSet<House> = HashSet::from_iter(new_houses.into_iter());
+            let mut send_url = HashSet::<ChatId>::new();
             for house in new_houses.difference(&old_houses) {
                 let observers = observers
                     .iter()
@@ -148,7 +168,13 @@ async fn get_houses_and_notify<Bot: Requester>(
                     bot.send_message(chat_id, format!("I found a new house! {}", house))
                         .await
                         .log_err();
+                    send_url.insert(chat_id);
                 }
+            }
+            for chat_id in send_url {
+                bot.send_message(chat_id, holland2stay_url())
+                    .await
+                    .log_err();
             }
             Some(new_houses)
         }
