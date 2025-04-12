@@ -1,4 +1,6 @@
-use std::{collections::HashMap, rc::Rc, str::FromStr};
+use std::collections::HashMap;
+
+use chrono::Datelike;
 
 fn get_graphql_query(city_id: CityId) -> String {
     format!(
@@ -48,27 +50,37 @@ pub enum Holland2StayError {
     FromStrError(#[from] derive_more::FromStrError),
 }
 
+fn is_some_or_unknown_str<T: ToString>(option: &Option<T>) -> String {
+    if let Some(t) = option {
+        t.to_string()
+    } else {
+        "unknown".to_string()
+    }
+}
+
 #[derive(derive_new::new, derive_more::Display, Hash, PartialEq, Eq)]
 #[display(
-    "{}: {} size: {} m2, floor: {}, minimum_stay: {}, price: {} euros, start_date: {}, contract_duration: {}",
+    "{}: {} size: {} m2, floor: {}, minimum_stay: {}, price: {} euros, start_date: {}, contract_duration: {}, link: {}",
     city,
     name,
-    size_meter_squared,
-    floor,
-    minimum_stay,
-    price,
-    start_date,
-    contract_duration
+    is_some_or_unknown_str(size_meter_squared),
+    is_some_or_unknown_str(floor),
+    is_some_or_unknown_str(minimum_stay),
+    is_some_or_unknown_str(price),
+    is_some_or_unknown_str(start_date),
+    is_some_or_unknown_str(contract_duration),
+    is_some_or_unknown_str(url)
 )]
 pub struct House {
     pub name: String,
+    pub url: Option<reqwest::Url>,
     pub city: City,
-    pub size_meter_squared: String,
-    pub floor: String,
-    pub minimum_stay: String,
-    pub price: String,
-    pub start_date: String,
-    pub contract_duration: String,
+    pub size_meter_squared: Option<String>,
+    pub floor: Option<String>,
+    pub minimum_stay: Option<String>,
+    pub price: Option<String>,
+    pub start_date: Option<String>,
+    pub contract_duration: Option<String>,
 }
 
 mod api_house {
@@ -77,28 +89,28 @@ mod api_house {
     #[derive(serde::Deserialize)]
     pub struct ApiHouse {
         pub name: String,
-        pub city: serde_json::Value,
-        pub living_area: String,
-        pub floor: serde_json::Value,
-        pub minimum_stay: String,
-        pub price_range: PriceRange,
-        pub next_contract_startdate: String,
-        pub type_of_contract: serde_json::Value,
+        pub url_key: String,
+        pub living_area: Option<String>,
+        pub floor: Option<serde_json::Value>,
+        pub minimum_stay: Option<String>,
+        pub price_range: Option<PriceRange>,
+        pub next_contract_startdate: Option<String>,
+        pub type_of_contract: Option<serde_json::Value>,
     }
 
     #[derive(serde::Deserialize)]
     pub struct PriceRange {
-        pub maximum_price: MaximumPrice,
+        pub maximum_price: Option<MaximumPrice>,
     }
 
     #[derive(serde::Deserialize)]
     pub struct MaximumPrice {
-        pub final_price: FinalPrice,
+        pub final_price: Option<FinalPrice>,
     }
 
     #[derive(serde::Deserialize)]
     pub struct FinalPrice {
-        pub value: f64,
+        pub value: Option<f64>,
     }
 
     #[derive(serde::Deserialize)]
@@ -120,17 +132,17 @@ mod api_house {
 }
 
 trait ToRustString {
-    fn to_rust_string(&self) -> String;
+    fn to_rust_string(&self) -> Option<String>;
 }
 
 impl ToRustString for serde_json::Value {
-    fn to_rust_string(&self) -> String {
+    fn to_rust_string(&self) -> Option<String> {
         match self {
-            serde_json::Value::String(s) => s.clone(), // Return raw string without quotes
-            serde_json::Value::Number(n) => n.to_string(), // Convert numbers directly
-            serde_json::Value::Bool(b) => b.to_string(), // Convert booleans directly
-            serde_json::Value::Null => "null".to_string(), // Convert null to "null"
-            _ => "object".to_string(),                 // Serialize complex types normally
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            serde_json::Value::Null => None,
+            _ => None,
         }
     }
 }
@@ -158,68 +170,95 @@ pub async fn query_houses_in_city(city: City) -> Result<Vec<House>, Holland2Stay
 
     let products = response
         .get_mut("data")
-        .ok_or(conversion_error())?
+        .ok_or_else(conversion_error)?
         .get_mut("products")
-        .ok_or(conversion_error())?;
+        .ok_or_else(conversion_error)?;
     let mut aggregations_map: api_house::Aggregations = HashMap::new();
     {
-        let aggregations: Vec<api_house::Aggregation> = products
-            .get_mut("aggregations")
-            .ok_or(conversion_error())?
-            .as_array_mut()
-            .ok_or(conversion_error())?
-            .into_iter()
-            .map(|value| serde_json::from_value(value.take()))
-            .collect::<Result<_, _>>()?;
-        for aggregation in aggregations {
-            let mut label_map = HashMap::new();
-            for option in aggregation.options {
-                label_map.insert(option.value, option.label);
+        if let Some(aggregations) = (|| -> Option<Vec<api_house::Aggregation>> {
+            Some(
+                products
+                    .get_mut("aggregations")?
+                    .as_array_mut()?
+                    .into_iter()
+                    .map(|value| serde_json::from_value(value.take()))
+                    .collect::<Result<_, _>>()
+                    .ok()?,
+            )
+        })() {
+            for aggregation in aggregations {
+                let mut label_map = HashMap::new();
+                for option in aggregation.options {
+                    label_map.insert(option.value, option.label);
+                }
+                aggregations_map.insert(aggregation.attribute_code, label_map);
             }
-            aggregations_map.insert(aggregation.attribute_code, label_map);
         }
     }
 
     let api_houses: Vec<api_house::ApiHouse> = products
         .get_mut("items")
-        .ok_or(conversion_error())?
+        .ok_or_else(conversion_error)?
         .as_array_mut()
-        .ok_or(conversion_error())?
+        .ok_or_else(conversion_error)?
         .into_iter()
         .map(|v| serde_json::from_value(v.take()))
         .collect::<Result<_, _>>()?;
 
     let mut houses = Vec::new();
     for api_house in api_houses {
-        let api_house_error =
-            || Holland2StayError::ConversionError("Could not perform aggregation".to_string());
+        let floor = || -> Option<String> {
+            Some(
+                aggregations_map
+                    .get("floor")?
+                    .get(&api_house.floor?.to_rust_string()?)?
+                    .clone(),
+            )
+        }();
+        let contract_duration = || -> Option<String> {
+            Some(
+                aggregations_map
+                    .get("type_of_contract")?
+                    .get(&api_house.type_of_contract?.to_rust_string()?)?
+                    .clone(),
+            )
+        }();
+        let price = || -> Option<String> {
+            Some(
+                api_house
+                    .price_range?
+                    .maximum_price?
+                    .final_price?
+                    .value?
+                    .to_string(),
+            )
+        }();
+        let start_date = || -> Option<String> {
+            let naive_dt = chrono::NaiveDateTime::parse_from_str(
+                &api_house.next_contract_startdate?,
+                "%Y-%m-%d %H:%M:%S",
+            )
+            .expect("Failed to parse datetime format");
+            let day = naive_dt.day();
+            let month = naive_dt.format("%B"); // Full month name
+            let year = naive_dt.year();
 
-        let floor = aggregations_map
-            .get("floor")
-            .ok_or_else(api_house_error)?
-            .get(&api_house.floor.to_rust_string())
-            .ok_or_else(api_house_error)?
-            .clone();
-        let contract_duration = aggregations_map
-            .get("type_of_contract")
-            .ok_or_else(api_house_error)?
-            .get(&api_house.type_of_contract.to_rust_string())
-            .ok_or_else(api_house_error)?
-            .clone();
+            Some(format!("{} {} {}", day, month, year))
+        }();
+        let url = reqwest::Url::parse("https://holland2stay.com/residences/")
+            .expect("Could not parse residences url")
+            .join(&api_house.url_key)
+            .ok();
 
         let house = House::new(
             api_house.name,
+            url,
             city,
             api_house.living_area,
             floor,
             api_house.minimum_stay,
-            api_house
-                .price_range
-                .maximum_price
-                .final_price
-                .value
-                .to_string(),
-            api_house.next_contract_startdate,
+            price,
+            start_date,
             contract_duration,
         );
         houses.push(house);
