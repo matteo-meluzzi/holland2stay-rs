@@ -2,13 +2,11 @@ use api::{City, House};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
-use teloxide::{
-    adaptors::Throttle, adaptors::throttle::Limits, prelude::*, utils::command::BotCommands,
-};
+use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
 use tokio::sync::{Mutex, mpsc, mpsc::Receiver};
 
 mod api;
-
+mod ngrok;
 trait LogErr {
     fn log_err(&self);
 }
@@ -19,10 +17,6 @@ impl<T, E: std::fmt::Display> LogErr for Result<T, E> {
             log::error!("An error has occurred: {}", e);
         }
     }
-}
-
-fn holland2stay_url() -> &'static str {
-    "https://holland2stay.com/residences?available_to_book%5Bfilter%5D=Available+to+book%2C179&page=1"
 }
 
 #[derive(BotCommands, Clone)]
@@ -78,14 +72,9 @@ async fn answer<B: Requester>(
             .await?;
 
             let houses = houses.lock().await;
-            let mut send_url = false;
             for house in houses.iter().filter(|house| house.city == city) {
                 bot.send_message(chat_id, format!("There is this house: {}", house))
                     .await?;
-                send_url = true;
-            }
-            if send_url {
-                bot.send_message(chat_id, holland2stay_url()).await?;
             }
         }
         Command::Unwatch(city) => {
@@ -171,11 +160,6 @@ async fn get_houses_and_notify<Bot: Requester>(
                     send_url.insert(chat_id);
                 }
             }
-            for chat_id in send_url {
-                bot.send_message(chat_id, holland2stay_url())
-                    .await
-                    .log_err();
-            }
             Some(new_houses)
         }
         Err(err) => {
@@ -225,8 +209,16 @@ async fn main() {
         .init();
     dotenv::dotenv().ok();
 
-    let token = std::env::var("TOKEN").expect("TOKEN environment variable not found");
-    let bot = Bot::new(token).throttle(Limits::default());
+    let bot = Bot::from_env();
+
+    let addr = ([127, 0, 0, 1], 8000).into();
+    let url = ngrok::fetch_ngrok_url()
+        .await
+        .expect("Could not fetch ngrok url");
+    let url = url.parse().expect("Could not parse ngrok url");
+    let listener = webhooks::axum(bot.clone(), webhooks::Options::new(addr, url))
+        .await
+        .expect("Couldn't setup webhook");
 
     let mut on_check_houses = setup_periodic_check_timer(std::time::Duration::from_secs(15));
 
@@ -254,11 +246,12 @@ async fn main() {
         }
     });
 
-    Command::repl(
+    Command::repl_with_listener(
         bot,
-        move |bot: Throttle<Bot>, msg: Message, cmd: Command| {
+        move |bot: Bot, msg: Message, cmd: Command| {
             answer(bot, msg, cmd, observers.clone(), houses_mutex.clone())
         },
+        listener,
     )
     .await;
 }
