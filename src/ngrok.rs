@@ -13,7 +13,7 @@ pub enum NgrokError {
 #[derive(Deserialize)]
 struct Tunnel {
     public_url: String,
-    proto: String,
+    name: String,
 }
 
 #[derive(Deserialize)]
@@ -30,7 +30,7 @@ pub async fn fetch_ngrok_url() -> Result<String, NgrokError> {
     Ok(resp
         .tunnels
         .into_iter()
-        .find(|t| t.proto == "https")
+        .find(|t| t.name == "holland2stay-bot")
         .map(|t| t.public_url)
         .ok_or_else(|| NgrokError::NgrokTunelNotFound)?)
 }
