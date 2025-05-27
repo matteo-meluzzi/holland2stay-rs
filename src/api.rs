@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use chrono::Datelike;
 
@@ -150,7 +150,9 @@ impl ToRustString for serde_json::Value {
 pub async fn query_houses_in_city(city: City) -> Result<Vec<House>, Holland2StayError> {
     let url = reqwest::Url::parse("https://api.holland2stay.com/graphql/")
         .expect("could not parse holland2stay api url");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()?;
     let mut response = client
         .post(url)
         .header("User-Agent", "Mozilla/5.0")

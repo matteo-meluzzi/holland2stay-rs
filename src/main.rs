@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
 use teloxide::{prelude::*, update_listeners::webhooks, utils::command::BotCommands};
+use tokio::signal;
 use tokio::sync::{Mutex, mpsc, mpsc::Receiver};
 
 mod api;
@@ -144,8 +145,10 @@ async fn get_houses_and_notify<Bot: Requester>(
                 acc.extend(cities);
                 acc
             });
-
-    match api::query_houses_in_cities(all_cities.iter()).await {
+    log::trace!("Starting to query all houses");
+    let all_houses = api::query_houses_in_cities(all_cities.iter()).await;
+    log::trace!("Done querying all houses");
+    match all_houses {
         Ok(new_houses) => {
             let new_houses: HashSet<House> = HashSet::from_iter(new_houses.into_iter());
             let mut send_url = HashSet::<ChatId>::new();
@@ -154,9 +157,17 @@ async fn get_houses_and_notify<Bot: Requester>(
                     .iter()
                     .filter(|(_, cities)| cities.contains(&house.city));
                 for (&chat_id, _) in observers {
+                    log::trace!(
+                        "Sending message that I found a new house to chat id {}",
+                        chat_id
+                    );
                     bot.send_message(chat_id, format!("I found a new house! {}", house))
                         .await
                         .log_err();
+                    log::trace!(
+                        "Done sending message that I found a new house to chat id {}",
+                        chat_id
+                    );
                     send_url.insert(chat_id);
                 }
             }
@@ -164,12 +175,20 @@ async fn get_houses_and_notify<Bot: Requester>(
         }
         Err(err) => {
             for (&chat_id, _) in observers.iter() {
+                log::trace!(
+                    "Sending message that an error occurred while fetching houses from holland2stay {}",
+                    chat_id
+                );
                 bot.send_message(
                     chat_id,
                     "An error occurred while fetching houses from holland2stay.",
                 )
                 .await
                 .log_err();
+                log::trace!(
+                    "Done sending message that an error occurred while fetching houses from holland2stay {}",
+                    chat_id
+                );
             }
             log::error!(
                 "An error occurred while fetching houses from holland2stay: {}",
@@ -188,6 +207,7 @@ fn setup_periodic_check_timer(period: std::time::Duration) -> Receiver<()> {
             if let Err(e) = timer_tx.send(()).await {
                 log::error!("Error sending timer message: {}", e);
             }
+            log::trace!("Sending timer wake up signal");
         }
     });
     timer_rx
@@ -195,7 +215,7 @@ fn setup_periodic_check_timer(period: std::time::Duration) -> Receiver<()> {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::new()
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
         .format(|buf, record| {
             writeln!(
                 buf,
@@ -205,7 +225,6 @@ async fn main() {
                 record.args()
             )
         })
-        .filter(None, log::LevelFilter::Info)
         .init();
     dotenv::dotenv().ok();
 
@@ -246,12 +265,19 @@ async fn main() {
         }
     });
 
-    Command::repl_with_listener(
-        bot,
-        move |bot: Bot, msg: Message, cmd: Command| {
-            answer(bot, msg, cmd, observers.clone(), houses_mutex.clone())
-        },
-        listener,
-    )
-    .await;
+    tokio::spawn(async move {
+        Command::repl_with_listener(
+            bot,
+            move |bot: Bot, msg: Message, cmd: Command| {
+                answer(bot, msg, cmd, observers.clone(), houses_mutex.clone())
+            },
+            listener,
+        )
+        .await;
+    });
+
+    signal::ctrl_c()
+        .await
+        .expect("failed to listen for shutdown signal");
+    log::info!("shutdown signal received, exiting");
 }
